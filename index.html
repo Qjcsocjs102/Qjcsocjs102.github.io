@@ -143,52 +143,11 @@
 
   <div class="hint" id="hint">0→100% 动态生成中 · 拖拽旋转 · 滚轮缩放</div>
 
-  <div class="hud" role="toolbar" aria-label="圣诞树控制栏">
-    <button class="btn" id="replayIntro" type="button">
-      <span>⟳</span>
-      <span>重播动画</span>
-    </button>
-    <button class="btn active" id="togglePlay" type="button">
-      <span id="playIcon">⏸</span>
-      <span id="playLabel">旋转中</span>
-    </button>
-    <button class="btn active" id="toggleRibbon" type="button">
-      <span>✨</span>
-      <span>光带: 开</span>
-    </button>
-    <button class="btn active" id="toggleFireworks" type="button">
-      <span>🎆</span>
-      <span>烟花: 开</span>
-    </button>
-    <button class="btn active" id="toggleSnow" type="button">
-      <span>❄️</span>
-      <span>雪花: 开</span>
-    </button>
-    <button class="btn" id="toggleMusic" type="button">
-      <span id="musicIcon">🎵</span>
-      <span id="musicLabel">音乐: 关</span>
-    </button>
-    <button class="btn" id="resetView" type="button">
-      <span>↺</span>
-      <span>重置视角</span>
-    </button>
-  </div>
-
   <script>
     (() => {
       const canvas = document.getElementById("scene");
       const ctx = canvas.getContext("2d", { alpha: true });
 
-      const replayIntroBtn = document.getElementById("replayIntro");
-      const togglePlayBtn = document.getElementById("togglePlay");
-      const playIcon = document.getElementById("playIcon");
-      const playLabel = document.getElementById("playLabel");
-      const toggleRibbonBtn = document.getElementById("toggleRibbon");
-      const toggleFireworksBtn = document.getElementById("toggleFireworks");
-      const toggleSnowBtn = document.getElementById("toggleSnow");
-      const toggleMusicBtn = document.getElementById("toggleMusic");
-      const musicLabel = document.getElementById("musicLabel");
-      const resetViewBtn = document.getElementById("resetView");
       const hintEl = document.getElementById("hint");
 
       let W = 0;
@@ -1404,71 +1363,6 @@
           musicTimer = null;
         }
       }
-
-      replayIntroBtn.addEventListener("click", () => {
-        state.introTime = 0;
-        state.rotY = 0;
-        fireworks.length = 0;
-        cometWakeParticles.length = 0;
-        state.camOffX = 0;
-        state.camOffY = 0;
-        fireworkCooldown = 0;
-        if (!state.playing) {
-          state.playing = true;
-          togglePlayBtn.classList.add("active");
-          playIcon.textContent = "⏸";
-          playLabel.textContent = "旋转中";
-        }
-      });
-
-      togglePlayBtn.addEventListener("click", () => {
-        state.playing = !state.playing;
-        togglePlayBtn.classList.toggle("active", state.playing);
-        playIcon.textContent = state.playing ? "⏸" : "▶";
-        playLabel.textContent = state.playing ? "旋转中" : "已暂停";
-      });
-
-      toggleRibbonBtn.addEventListener("click", () => {
-        state.showRibbon = !state.showRibbon;
-        toggleRibbonBtn.classList.toggle("active", state.showRibbon);
-        toggleRibbonBtn.lastElementChild.textContent = state.showRibbon ? "光带: 开" : "光带: 关";
-      });
-
-      toggleFireworksBtn.addEventListener("click", () => {
-        state.showFireworks = !state.showFireworks;
-        toggleFireworksBtn.classList.toggle("active", state.showFireworks);
-        toggleFireworksBtn.lastElementChild.textContent = state.showFireworks ? "烟花: 开" : "烟花: 关";
-      });
-
-      toggleSnowBtn.addEventListener("click", () => {
-        state.showSnow = !state.showSnow;
-        toggleSnowBtn.classList.toggle("active", state.showSnow);
-        toggleSnowBtn.lastElementChild.textContent = state.showSnow ? "雪花: 开" : "雪花: 开".replace("开", "关");
-      });
-
-      toggleMusicBtn.addEventListener("click", () => {
-        state.musicOn = !state.musicOn;
-        toggleMusicBtn.classList.toggle("active", state.musicOn);
-        musicLabel.textContent = state.musicOn ? "音乐: 开" : "音乐: 关";
-        if (state.musicOn) {
-          const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-          if (!audioCtx && AudioContextClass) {
-            audioCtx = new AudioContextClass();
-          }
-          if (audioCtx && audioCtx.state === "suspended") {
-            audioCtx.resume();
-          }
-          scheduleNextNote();
-        } else {
-          stopMusic();
-        }
-      });
-
-      resetViewBtn.addEventListener("click", () => {
-        state.targetRotX = 0.08;
-        state.targetZoom = 1;
-        state.velY = 0;
-      });
 
       window.onload = () => {
         requestAnimationFrame(render);
