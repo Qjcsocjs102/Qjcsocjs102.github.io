@@ -1,0 +1,1373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>星光冰雪圣诞树 · 0→100% 动态生成</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000000;
+      font-family: -apple-system, BlinkMacSystemFont, "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: #e6f2ff;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    #glScene {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    #scene {
+      position: fixed;
+      inset: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+      cursor: grab;
+      touch-action: none;
+      z-index: 2;
+    }
+
+    #scene:active {
+      cursor: grabbing;
+    }
+
+    .hud {
+      position: fixed;
+      left: 50%;
+      bottom: 18px;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 10px;
+      border-radius: 999px;
+      background: rgba(6, 14, 28, 0.68);
+      border: 1px solid rgba(165, 215, 255, 0.18);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+      z-index: 10;
+      max-width: calc(100vw - 24px);
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .btn {
+      appearance: none;
+      border: 1px solid rgba(180, 224, 255, 0.18);
+      background: rgba(255, 255, 255, 0.06);
+      color: #e6f3ff;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 6px 10px;
+      border-radius: 999px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      transition: background 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
+      white-space: nowrap;
+    }
+
+    .btn:hover {
+      background: rgba(160, 218, 255, 0.16);
+      border-color: rgba(180, 224, 255, 0.4);
+    }
+
+    .btn:active {
+      transform: scale(0.96);
+    }
+
+    .btn.active {
+      background: rgba(126, 206, 255, 0.24);
+      border-color: rgba(160, 225, 255, 0.55);
+      color: #ffffff;
+    }
+
+    .hint {
+      position: fixed;
+      top: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      color: rgba(220, 238, 255, 0.78);
+      background: rgba(6, 14, 28, 0.5);
+      border: 1px solid rgba(165, 215, 255, 0.16);
+      padding: 6px 14px;
+      border-radius: 999px;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      pointer-events: none;
+      white-space: nowrap;
+      z-index: 10;
+      transition: opacity 0.5s ease;
+    }
+
+    @media (max-width: 600px) {
+      .hud {
+        bottom: 12px;
+        gap: 5px;
+        padding: 6px 9px;
+      }
+      .btn {
+        font-size: 11px;
+        padding: 5px 9px;
+      }
+      .hint {
+        font-size: 11px;
+        top: 10px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="glScene"></canvas>
+  <canvas id="scene"></canvas>
+
+  <div class="hint" id="hint">0→100% 动态生成中 · 拖拽旋转 · 滚轮缩放</div>
+
+  <script>
+    (() => {
+      const canvas = document.getElementById("scene");
+      const ctx = canvas.getContext("2d", { alpha: true });
+
+      const hintEl = document.getElementById("hint");
+
+      let W = 0;
+      let H = 0;
+      let DPR = 1;
+
+      const INTRO_DURATION = 13.5; // seconds from 0% to 100%
+
+      const state = {
+        playing: true,
+        showRibbon: true,
+        showFireworks: true,
+        showSnow: true,
+        musicOn: false,
+        rotY: 0,
+        targetRotX: 0.08,
+        rotX: 0.08,
+        zoom: 1,
+        targetZoom: 1,
+        dragging: false,
+        lastX: 0,
+        lastY: 0,
+        velY: 0,
+        time: 0,
+        introTime: 0,
+        camOffX: 0,
+        camOffY: 0
+      };
+
+      function clamp01(v) {
+        return Math.max(0, Math.min(1, v));
+      }
+
+      function smoothstep(edge0, edge1, x) {
+        const t = clamp01((x - edge0) / (edge1 - edge0));
+        return t * t * (3 - 2 * t);
+      }
+
+      function easeOutCubic(t) {
+        return 1 - Math.pow(1 - clamp01(t), 3);
+      }
+
+      function easeInOutCubic(t) {
+        const x = clamp01(t);
+        return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+      }
+
+      function createGlowSprite(size, stops) {
+        const c = document.createElement("canvas");
+        c.width = size;
+        c.height = size;
+        const gctx = c.getContext("2d");
+        const half = size / 2;
+        const grad = gctx.createRadialGradient(half, half, 0, half, half, half);
+        for (const [offset, color] of stops) {
+          grad.addColorStop(offset, color);
+        }
+        gctx.fillStyle = grad;
+        gctx.fillRect(0, 0, size, size);
+        return c;
+      }
+
+      const iceGlow = createGlowSprite(64, [
+        [0.0, "rgba(255, 255, 255, 1)"],
+        [0.14, "rgba(185, 228, 255, 0.92)"],
+        [0.36, "rgba(95, 172, 255, 0.32)"],
+        [1.0, "rgba(30, 90, 200, 0)"]
+      ]);
+
+      const goldGlow = createGlowSprite(64, [
+        [0.0, "rgba(255, 254, 235, 1)"],
+        [0.2, "rgba(255, 236, 150, 0.92)"],
+        [0.5, "rgba(255, 205, 90, 0.3)"],
+        [1.0, "rgba(255, 175, 50, 0)"]
+      ]);
+
+      const paleYellowGlow = createGlowSprite(64, [
+        [0.0, "rgba(255, 255, 248, 1)"],
+        [0.22, "rgba(255, 248, 185, 0.95)"],
+        [0.52, "rgba(255, 232, 125, 0.36)"],
+        [1.0, "rgba(255, 215, 80, 0)"]
+      ]);
+
+      const softMistGlow = createGlowSprite(128, [
+        [0.0, "rgba(215, 238, 255, 0.36)"],
+        [0.42, "rgba(130, 180, 230, 0.14)"],
+        [1.0, "rgba(40, 80, 130, 0)"]
+      ]);
+
+      let seed = 20261225;
+      function rand() {
+        seed = (seed * 1664525 + 1013904223) >>> 0;
+        return seed / 4294967296;
+      }
+
+      const TREE_HEIGHT = 530;
+      const TREE_TOP_Y = -285;
+      const TREE_BASE_Y = TREE_TOP_Y + TREE_HEIGHT;
+      const TREE_BASE_R = 225;
+
+      // 1. Comet intro path (Stage 1: 0s -> 3.3s)
+      const cometPoints = [];
+      const COMET_STEPS = 240;
+      for (let i = 0; i <= COMET_STEPS; i++) {
+        const t = i / COMET_STEPS;
+        const theta = -1.2 + t * Math.PI * 3.8;
+        const r = 40 + Math.sin(t * Math.PI * 0.95) * 260 * (0.4 + 0.6 * t);
+        const y = -360 + Math.pow(t, 0.88) * (TREE_BASE_Y + 370);
+        cometPoints.push({
+          x: Math.cos(theta) * r,
+          y,
+          z: Math.sin(theta) * r
+        });
+      }
+      const cometWakeParticles = [];
+
+      // 2. GPU-accelerated WebGL 42,000-particle foliage system (60fps, zero CPU lag)
+      const glCanvas = document.getElementById("glScene");
+      const gl = glCanvas.getContext("webgl", { alpha: false, antialias: false, powerPreference: "high-performance" });
+      const TREE_PARTICLE_COUNT = 42000;
+      let glProgram = null;
+      let glUniforms = null;
+
+      if (gl) {
+        const vsSource = `
+          attribute vec3 a_target;
+          attribute vec3 a_start;
+          attribute vec4 a_meta;   // x: tNorm, y: swirlOffset, z: size, w: alpha
+          attribute vec3 a_anim;   // x: phase, y: speed, z: warm
+
+          uniform float u_assemble;
+          uniform float u_vortexAppear;
+          uniform float u_discSpin;
+          uniform float u_rotY;
+          uniform float u_rotX;
+          uniform float u_scaleBase;
+          uniform vec2 u_center;
+          uniform vec2 u_res;
+          uniform float u_dpr;
+          uniform float u_time;
+
+          varying float v_alpha;
+          varying float v_warm;
+
+          float easeInOutCubic(float x) {
+            x = clamp(x, 0.0, 1.0);
+            return x < 0.5 ? 4.0 * x * x * x : 1.0 - pow(-2.0 * x + 2.0, 3.0) / 2.0;
+          }
+
+          void main() {
+            float tNorm = a_meta.x;
+            float localAssemble = easeInOutCubic(clamp((u_assemble * 1.25) - (1.0 - tNorm) * 0.25, 0.0, 1.0));
+            float swirlAngle = (1.0 - localAssemble) * a_meta.y + (1.0 - localAssemble) * u_discSpin * 0.35;
+            float cosS = cos(swirlAngle);
+            float sinS = sin(swirlAngle);
+
+            vec3 pos = mix(a_start, a_target, localAssemble);
+            vec3 world = vec3(pos.x * cosS - pos.z * sinS, pos.y, pos.x * sinS + pos.z * cosS);
+
+            float cosY = cos(u_rotY);
+            float sinY = sin(u_rotY);
+            float x1 = world.x * cosY - world.z * sinY;
+            float z1 = world.x * sinY + world.z * cosY;
+
+            float cosX = cos(u_rotX);
+            float sinX = sin(u_rotX);
+            float y2 = world.y * cosX - z1 * sinX;
+            float z2 = world.y * sinX + z1 * cosX;
+
+            float dist = 820.0 + z2;
+            if (dist < 60.0) {
+              gl_Position = vec4(2.0, 2.0, 0.0, 1.0);
+              gl_PointSize = 0.0;
+              v_alpha = 0.0;
+              v_warm = 0.0;
+              return;
+            }
+
+            float perspective = (820.0 / dist) * u_scaleBase;
+            float sx = u_center.x + x1 * perspective;
+            float sy = u_center.y + y2 * perspective;
+
+            gl_Position = vec4((sx / u_res.x) * 2.0 - 1.0, 1.0 - (sy / u_res.y) * 2.0, 0.0, 1.0);
+            gl_PointSize = clamp(a_meta.z * perspective * u_dpr * 2.5, 1.0, 18.0);
+
+            float twinkle = 0.58 + 0.42 * sin(u_time * a_anim.y + a_anim.x);
+            float depthFade = clamp(1.0 - z2 / 650.0, 0.28, 1.0);
+            v_alpha = a_meta.w * twinkle * depthFade * u_vortexAppear;
+            v_warm = a_anim.z;
+          }
+        `;
+
+        const fsSource = `
+          precision mediump float;
+          varying float v_alpha;
+          varying float v_warm;
+
+          void main() {
+            vec2 uv = gl_PointCoord - vec2(0.5);
+            float d = length(uv) * 2.0;
+            if (d > 1.0 || v_alpha <= 0.005) discard;
+
+            float core = exp(-d * d * 5.2);
+            float halo = pow(max(0.0, 1.0 - d), 2.4) * 0.55;
+            float intensity = (core + halo) * v_alpha;
+
+            vec3 iceColor = mix(vec3(0.45, 0.74, 1.0), vec3(0.96, 0.99, 1.0), core);
+            vec3 warmColor = mix(vec3(1.0, 0.8, 0.38), vec3(1.0, 0.98, 0.88), core);
+            vec3 col = mix(iceColor, warmColor, v_warm);
+
+            gl_FragColor = vec4(col * intensity, intensity);
+          }
+        `;
+
+        function compileShader(type, src) {
+          const sh = gl.createShader(type);
+          gl.shaderSource(sh, src);
+          gl.compileShader(sh);
+          return sh;
+        }
+
+        const vs = compileShader(gl.VERTEX_SHADER, vsSource);
+        const fs = compileShader(gl.FRAGMENT_SHADER, fsSource);
+        glProgram = gl.createProgram();
+        gl.attachShader(glProgram, vs);
+        gl.attachShader(glProgram, fs);
+        gl.linkProgram(glProgram);
+        gl.useProgram(glProgram);
+
+        const targetArr = new Float32Array(TREE_PARTICLE_COUNT * 3);
+        const startArr = new Float32Array(TREE_PARTICLE_COUNT * 3);
+        const metaArr = new Float32Array(TREE_PARTICLE_COUNT * 4);
+        const animArr = new Float32Array(TREE_PARTICLE_COUNT * 3);
+
+        for (let i = 0; i < TREE_PARTICLE_COUNT; i++) {
+          const t = Math.pow(rand(), 0.72);
+          const y = TREE_TOP_Y + t * TREE_HEIGHT;
+          const tierWave = Math.sin(t * Math.PI * 14) * 0.08 + 1.0;
+          const maxR = TREE_BASE_R * Math.pow(t, 0.92) * tierWave;
+          const radialBias = 0.2 + 0.8 * Math.pow(rand(), 0.42);
+          const r = maxR * radialBias;
+          const angle = rand() * Math.PI * 2;
+
+          const discR = 95 + rand() * 320;
+          const discAngle = angle + rand() * 3.4;
+
+          const i3 = i * 3;
+          const i4 = i * 4;
+          targetArr[i3] = Math.cos(angle) * r;
+          targetArr[i3 + 1] = y + (rand() - 0.5) * 9;
+          targetArr[i3 + 2] = Math.sin(angle) * r;
+
+          startArr[i3] = Math.cos(discAngle) * discR;
+          startArr[i3 + 1] = TREE_BASE_Y + 12 + (rand() - 0.5) * 24;
+          startArr[i3 + 2] = Math.sin(discAngle) * discR;
+
+          metaArr[i4] = t;
+          metaArr[i4 + 1] = (1 - t) * 4.2 + rand() * 1.4;
+          metaArr[i4 + 2] = (0.65 + rand() * 1.6) * (0.7 + 0.4 * (1 - t * 0.3));
+          metaArr[i4 + 3] = 0.22 + rand() * 0.48;
+
+          animArr[i3] = rand() * Math.PI * 2;
+          animArr[i3 + 1] = 1.4 + rand() * 2.5;
+          animArr[i3 + 2] = rand() < 0.06 ? 1.0 : 0.0;
+        }
+
+        function bindAttr(name, data, size) {
+          const buf = gl.createBuffer();
+          gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+          gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+          const loc = gl.getAttribLocation(glProgram, name);
+          gl.enableVertexAttribArray(loc);
+          gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+        }
+
+        bindAttr("a_target", targetArr, 3);
+        bindAttr("a_start", startArr, 3);
+        bindAttr("a_meta", metaArr, 4);
+        bindAttr("a_anim", animArr, 3);
+
+        glUniforms = {
+          assemble: gl.getUniformLocation(glProgram, "u_assemble"),
+          vortexAppear: gl.getUniformLocation(glProgram, "u_vortexAppear"),
+          discSpin: gl.getUniformLocation(glProgram, "u_discSpin"),
+          rotY: gl.getUniformLocation(glProgram, "u_rotY"),
+          rotX: gl.getUniformLocation(glProgram, "u_rotX"),
+          scaleBase: gl.getUniformLocation(glProgram, "u_scaleBase"),
+          center: gl.getUniformLocation(glProgram, "u_center"),
+          res: gl.getUniformLocation(glProgram, "u_res"),
+          dpr: gl.getUniformLocation(glProgram, "u_dpr"),
+          time: gl.getUniformLocation(glProgram, "u_time")
+        };
+
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.ONE, gl.ONE);
+      }
+
+      // 3. Warm golden scalloped fairy-light garlands
+      const garlandPoints = [];
+      const GARLAND_TURNS = 8.5;
+      const GARLAND_STEPS = 420;
+      for (let i = 0; i <= GARLAND_STEPS; i++) {
+        const t = i / GARLAND_STEPS;
+        const theta = t * Math.PI * 2 * GARLAND_TURNS;
+        const scallop = Math.sin(theta * 3) * 7 * (0.3 + t * 0.7);
+        const y = TREE_TOP_Y + 18 + t * (TREE_HEIGHT - 28) + scallop;
+        const r = (TREE_BASE_R * Math.pow(t, 0.92) + 6) * 0.99;
+        garlandPoints.push({
+          x: Math.cos(theta) * r,
+          y,
+          z: Math.sin(theta) * r,
+          t,
+          size: 3.1 + (i % 4 === 0 ? 2.3 : 0),
+          phase: i * 0.25,
+          isBulb: i % 3 === 0
+        });
+      }
+
+      // 4. Outer luminous white/silver spiral ribbon
+      const ribbonPoints = [];
+      const RIBBON_TURNS = 6.2;
+      const RIBBON_STEPS = 380;
+      for (let i = 0; i <= RIBBON_STEPS; i++) {
+        const t = i / RIBBON_STEPS;
+        const theta = t * Math.PI * 2 * RIBBON_TURNS + 0.8;
+        const y = TREE_TOP_Y + 8 + t * (TREE_HEIGHT - 20);
+        const r = TREE_BASE_R * Math.pow(t, 0.92) * 1.13 + 14;
+        ribbonPoints.push({
+          x: Math.cos(theta) * r,
+          y,
+          z: Math.sin(theta) * r,
+          t
+        });
+      }
+
+      const ribbonDust = [];
+      for (let i = 0; i < 240; i++) {
+        const t = rand();
+        const theta = t * Math.PI * 2 * RIBBON_TURNS + 0.8 + (rand() - 0.5) * 0.25;
+        const y = TREE_TOP_Y + 8 + t * (TREE_HEIGHT - 20) + (rand() - 0.5) * 16;
+        const r = TREE_BASE_R * Math.pow(t, 0.92) * 1.13 + 14 + (rand() - 0.5) * 18;
+        ribbonDust.push({
+          x: Math.cos(theta) * r,
+          y,
+          z: Math.sin(theta) * r,
+          t,
+          size: 1.5 + rand() * 2.5,
+          phase: rand() * Math.PI * 2
+        });
+      }
+
+
+
+      // 5b. Sparkling 4-point diamond stars nestled on the tree
+      const starOrnaments = [];
+      for (let i = 0; i < 34; i++) {
+        const t = 0.12 + rand() * 0.82;
+        const angle = rand() * Math.PI * 2;
+        const r = TREE_BASE_R * Math.pow(t, 0.92) * (0.85 + rand() * 0.2);
+        starOrnaments.push({
+          x: Math.cos(angle) * r,
+          y: TREE_TOP_Y + t * TREE_HEIGHT,
+          z: Math.sin(angle) * r,
+          t,
+          size: 5 + rand() * 5,
+          warm: rand() < 0.6,
+          phase: rand() * Math.PI * 2
+        });
+      }
+
+      // 5c. Gift boxes around the snowy base
+      const giftBoxes = [];
+      const giftColors = [
+        { box: "#9e2a3b", ribbon: "#ffd97d" },
+        { box: "#1e5875", ribbon: "#e6f3ff" },
+        { box: "#b5842c", ribbon: "#fff5d6" },
+        { box: "#246657", ribbon: "#ffd97d" }
+      ];
+      for (let i = 0; i < 9; i++) {
+        const ang = (i / 9) * Math.PI * 2 + 0.3;
+        const r = 135 + (i % 3) * 32;
+        const pal = giftColors[i % giftColors.length];
+        giftBoxes.push({
+          x: Math.cos(ang) * r,
+          y: TREE_BASE_Y + 6,
+          z: Math.sin(ang) * r,
+          w: 20 + (i % 3) * 6,
+          h: 16 + (i % 2) * 6,
+          boxColor: pal.box,
+          ribbonColor: pal.ribbon
+        });
+      }
+
+      // 6. Expanding top stardust ring particles (ignites at Stage 4)
+      const haloRingParticles = [];
+      for (let i = 0; i < 180; i++) {
+        const angle = (i / 180) * Math.PI * 2 + (rand() - 0.5) * 0.1;
+        haloRingParticles.push({
+          angle,
+          radiusScale: 0.85 + rand() * 0.35,
+          yOff: (rand() - 0.5) * 14,
+          size: 1.4 + rand() * 2.4
+        });
+      }
+
+      // 7. Distant background pine silhouettes
+      const bgTrees = [];
+      for (let i = 0; i < 16; i++) {
+        const side = i < 8 ? -1 : 1;
+        const distFactor = (i % 8) / 8;
+        bgTrees.push({
+          xNorm: 0.5 + side * (0.18 + distFactor * 0.34 + (rand() - 0.5) * 0.04),
+          yNorm: 0.72 + rand() * 0.08,
+          hNorm: 0.14 + rand() * 0.16,
+          wNorm: 0.045 + rand() * 0.035,
+          alpha: 0.28 + rand() * 0.32
+        });
+      }
+
+      // 8. 3D deep-space stars & 3D ground depth particles + drifting snow
+      const stars = [];
+      for (let i = 0; i < 160; i++) {
+        const ang = rand() * Math.PI * 2;
+        const dist = 420 + rand() * 900;
+        stars.push({
+          x: Math.cos(ang) * dist,
+          y: -520 + rand() * 760,
+          z: Math.sin(ang) * dist,
+          r: 0.7 + rand() * 1.6,
+          phase: rand() * Math.PI * 2
+        });
+      }
+
+      const floorDepthDust = [];
+      for (let i = 0; i < 140; i++) {
+        const ang = rand() * Math.PI * 2;
+        const dist = 160 + rand() * 680;
+        floorDepthDust.push({
+          x: Math.cos(ang) * dist,
+          y: TREE_BASE_Y + 14 + (rand() - 0.5) * 6,
+          z: Math.sin(ang) * dist,
+          size: 0.8 + rand() * 1.4,
+          alpha: 0.12 + rand() * 0.25
+        });
+      }
+
+      const snowFlakes = [];
+      for (let i = 0; i < 150; i++) {
+        snowFlakes.push({
+          x: (rand() - 0.5) * 1100,
+          y: -420 + rand() * 820,
+          z: (rand() - 0.5) * 800,
+          vy: 14 + rand() * 24,
+          vx: (rand() - 0.5) * 12,
+          size: 1.5 + rand() * 3.2,
+          phase: rand() * Math.PI * 2
+        });
+      }
+
+      // 9. Sky Fireworks system (activates in Stage 5: 8.6s+)
+      const fireworks = [];
+      let fireworkCooldown = 0;
+      const fireworkPalettes = [
+        { warm: true, core: "#fff7d6" },
+        { warm: false, core: "#dff2ff" },
+        { warm: true, core: "#ffe29a" }
+      ];
+
+      function spawnFirework(sideHint) {
+        const side = sideHint !== undefined ? sideHint : (Math.random() < 0.5 ? -1 : 1);
+        const xNorm = side < 0 ? 0.14 + Math.random() * 0.18 : 0.68 + Math.random() * 0.18;
+        const yNorm = 0.16 + Math.random() * 0.2;
+        const palette = fireworkPalettes[Math.floor(Math.random() * fireworkPalettes.length)];
+        const count = 88 + Math.floor(Math.random() * 36);
+        const maxR = 65 + Math.random() * 55;
+        const sparks = [];
+        for (let i = 0; i < count; i++) {
+          const ang = (i / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.08;
+          const speed = (0.35 + Math.random() * 0.65) * maxR;
+          sparks.push({
+            ang,
+            speed,
+            size: 1.6 + Math.random() * 2.2,
+            trailLen: 0.12 + Math.random() * 0.14
+          });
+        }
+        fireworks.push({
+          xNorm,
+          yNorm,
+          age: 0,
+          life: 2.1 + Math.random() * 0.7,
+          warm: palette.warm,
+          sparks
+        });
+      }
+
+      function resize() {
+        DPR = Math.min(window.devicePixelRatio || 1, 1.5);
+        W = window.innerWidth;
+        H = window.innerHeight;
+        canvas.width = Math.floor(W * DPR);
+        canvas.height = Math.floor(H * DPR);
+        ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+        if (glCanvas && gl) {
+          glCanvas.width = canvas.width;
+          glCanvas.height = canvas.height;
+          gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+        }
+      }
+
+      window.addEventListener("resize", resize);
+      resize();
+
+      function project(x, y, z, rotY, rotX, scaleBase, cx, cy) {
+        const cosY = Math.cos(rotY);
+        const sinY = Math.sin(rotY);
+        const x1 = x * cosY - z * sinY;
+        const z1 = x * sinY + z * cosY;
+
+        const cosX = Math.cos(rotX);
+        const sinX = Math.sin(rotX);
+        const y2 = y * cosX - z1 * sinX;
+        const z2 = y * sinX + z1 * cosX;
+
+        const fov = 820;
+        const dist = fov + z2;
+        if (dist < 60) return null;
+        const perspective = (fov / dist) * scaleBase;
+        return {
+          sx: cx + x1 * perspective,
+          sy: cy + y2 * perspective,
+          depth: z2,
+          scale: perspective
+        };
+      }
+
+      function drawBackground(t, scaleBase, cx, cy) {
+        // Clear 2D overlay transparently (WebGL layer underneath provides #000000 + 42,000 particles)
+        ctx.clearRect(0, 0, W, H);
+
+        // Subtle 3D radial depth vignette behind the tree so the center feels recessed in space
+        const depthGlow = ctx.createRadialGradient(
+          cx,
+          cy + 40 * scaleBase,
+          20 * scaleBase,
+          cx,
+          cy + 40 * scaleBase,
+          Math.max(W, H) * 0.55
+        );
+        depthGlow.addColorStop(0, "rgba(18, 38, 68, 0.22)");
+        depthGlow.addColorStop(0.55, "rgba(6, 14, 28, 0.1)");
+        depthGlow.addColorStop(1, "rgba(0, 0, 0, 0)");
+        ctx.fillStyle = depthGlow;
+        ctx.fillRect(0, 0, W, H);
+
+        // 3D projected stars in space (intro camera tracking moves them in 3D parallax)
+        const starRotY = state.introTime < 4.5 ? state.rotY * 0.25 : 0;
+        for (const st of stars) {
+          const proj = project(st.x, st.y, st.z, starRotY, state.rotX * 0.35, scaleBase, cx, cy);
+          if (!proj) continue;
+          const tw = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * 1.8 + st.phase));
+          const depthAlpha = Math.max(0.15, Math.min(0.85, 1 - proj.depth / 1400));
+          ctx.fillStyle = `rgba(215, 238, 255, ${tw * depthAlpha * 0.72})`;
+          ctx.beginPath();
+          ctx.arc(proj.sx, proj.sy, Math.max(0.5, st.r * proj.scale), 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // 3D perspective floor stardust plane for strong 3D spatial grounding
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        for (const fd of floorDepthDust) {
+          const proj = project(fd.x, fd.y, fd.z, state.rotY * 0.4, state.rotX, scaleBase, cx, cy);
+          if (!proj) continue;
+          const depthAlpha = Math.max(0.05, Math.min(0.42, 1 - proj.depth / 1000));
+          ctx.globalAlpha = fd.alpha * depthAlpha;
+          const r = fd.size * proj.scale * 1.5;
+          ctx.drawImage(iceGlow, proj.sx - r, proj.sy - r, r * 2, r * 2);
+        }
+        ctx.restore();
+      }
+
+      function drawCometIntro(introTime, cx, cy, scaleBase) {
+        const progress = clamp01(introTime / 3.3);
+        const fadeOut = 1 - smoothstep(3.0, 4.1, introTime);
+        if (fadeOut <= 0.01) return;
+
+        const maxIdx = Math.floor(progress * (cometPoints.length - 1));
+        const tailStart = Math.max(0, maxIdx - 85);
+
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+
+        for (let i = tailStart + 1; i <= maxIdx; i++) {
+          const p0 = project(cometPoints[i - 1].x, cometPoints[i - 1].y, cometPoints[i - 1].z, state.rotY * 0.3, state.rotX, scaleBase, cx, cy);
+          const p1 = project(cometPoints[i].x, cometPoints[i].y, cometPoints[i].z, state.rotY * 0.3, state.rotX, scaleBase, cx, cy);
+          if (!p0 || !p1) continue;
+          const localFrac = (i - tailStart) / Math.max(1, maxIdx - tailStart);
+          const alpha = localFrac * fadeOut;
+
+          ctx.strokeStyle = `rgba(180, 228, 255, ${alpha * 0.42})`;
+          ctx.lineWidth = (2 + localFrac * 5.5) * p1.scale;
+          ctx.lineCap = "round";
+          ctx.beginPath();
+          ctx.moveTo(p0.sx, p0.sy);
+          ctx.lineTo(p1.sx, p1.sy);
+          ctx.stroke();
+
+          ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.92})`;
+          ctx.lineWidth = (0.8 + localFrac * 2.0) * p1.scale;
+          ctx.beginPath();
+          ctx.moveTo(p0.sx, p0.sy);
+          ctx.lineTo(p1.sx, p1.sy);
+          ctx.stroke();
+
+          if (i % 3 === 0) {
+            const sr = (1.5 + (i % 5) * 0.5) * p1.scale;
+            ctx.globalAlpha = alpha * 0.7;
+            ctx.drawImage(iceGlow, p1.sx - sr, p1.sy - sr, sr * 2, sr * 2);
+            ctx.globalAlpha = 1;
+          }
+        }
+
+        // Render shedding wake particles following the comet
+        for (let i = cometWakeParticles.length - 1; i >= 0; i--) {
+          const wp = cometWakeParticles[i];
+          const ageNorm = wp.age / wp.life;
+          if (ageNorm >= 1) {
+            cometWakeParticles.splice(i, 1);
+            continue;
+          }
+          const proj = project(wp.x, wp.y, wp.z, state.rotY * 0.3, state.rotX, scaleBase, cx, cy);
+          if (!proj) continue;
+          const alpha = (1 - ageNorm) * wp.alpha * Math.max(fadeOut, 0.25);
+          ctx.globalAlpha = alpha;
+          const wr = wp.size * proj.scale * (1.8 - ageNorm * 0.6);
+          ctx.drawImage(wp.warm ? paleYellowGlow : iceGlow, proj.sx - wr, proj.sy - wr, wr * 2, wr * 2);
+        }
+
+        // Bright comet head with horizontal anamorphic lens flare like the video
+        const headPt = cometPoints[maxIdx];
+        const headProj = project(headPt.x, headPt.y, headPt.z, state.rotY * 0.3, state.rotX, scaleBase, cx, cy);
+        if (headProj) {
+          const hr = 48 * headProj.scale * fadeOut;
+          ctx.globalAlpha = fadeOut;
+          ctx.drawImage(iceGlow, headProj.sx - hr, headProj.sy - hr, hr * 2, hr * 2);
+
+          // Subtle horizontal light streak
+          const flareW = 95 * headProj.scale;
+          const flareGrad = ctx.createLinearGradient(headProj.sx - flareW, headProj.sy, headProj.sx + flareW, headProj.sy);
+          flareGrad.addColorStop(0, "rgba(180, 225, 255, 0)");
+          flareGrad.addColorStop(0.5, `rgba(235, 248, 255, ${0.75 * fadeOut})`);
+          flareGrad.addColorStop(1, "rgba(180, 225, 255, 0)");
+          ctx.strokeStyle = flareGrad;
+          ctx.lineWidth = Math.max(1.2, 2.6 * headProj.scale);
+          ctx.beginPath();
+          ctx.moveTo(headProj.sx - flareW, headProj.sy);
+          ctx.lineTo(headProj.sx + flareW, headProj.sy);
+          ctx.stroke();
+        }
+
+        ctx.restore();
+      }
+
+      function drawTreeTopper(cx, cy, scaleBase, t, topperAlpha) {
+        if (topperAlpha <= 0.01) return;
+        const top = project(0, TREE_TOP_Y - 10, 0, state.rotY, state.rotX, scaleBase, cx, cy);
+        if (!top) return;
+
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.globalAlpha = topperAlpha;
+        const s = top.scale;
+        const pulse = (0.9 + 0.14 * Math.sin(t * 3.1)) * (0.6 + 0.4 * topperAlpha);
+
+        const haloR = 56 * s * pulse;
+        ctx.drawImage(iceGlow, top.sx - haloR, top.sy - haloR, haloR * 2, haloR * 2);
+
+        const rays = [
+          { angle: -Math.PI / 2, len: 38, w: 3.4 },
+          { angle: -Math.PI / 2 - 0.38, len: 27, w: 2.2 },
+          { angle: -Math.PI / 2 + 0.38, len: 27, w: 2.2 },
+          { angle: -Math.PI / 2 - 0.88, len: 19, w: 1.7 },
+          { angle: -Math.PI / 2 + 0.88, len: 19, w: 1.7 },
+          { angle: Math.PI / 2, len: 14, w: 1.6 }
+        ];
+
+        for (const r of rays) {
+          const ex = top.sx + Math.cos(r.angle) * r.len * s * pulse;
+          const ey = top.sy + Math.sin(r.angle) * r.len * s * pulse;
+          const grad = ctx.createLinearGradient(top.sx, top.sy, ex, ey);
+          grad.addColorStop(0, "rgba(255, 255, 255, 1)");
+          grad.addColorStop(0.45, "rgba(215, 240, 255, 0.85)");
+          grad.addColorStop(1, "rgba(150, 210, 255, 0)");
+          ctx.strokeStyle = grad;
+          ctx.lineWidth = Math.max(1, r.w * s);
+          ctx.lineCap = "round";
+          ctx.beginPath();
+          ctx.moveTo(top.sx, top.sy);
+          ctx.lineTo(ex, ey);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      function drawTopHaloRing(introTime, cx, cy, scaleBase) {
+        const ringT = clamp01((introTime - 7.5) / 2.6);
+        if (ringT <= 0 || ringT >= 1) return;
+        const fade = Math.sin(ringT * Math.PI);
+        const radius = 35 + easeOutCubic(ringT) * 290;
+
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        for (const p of haloRingParticles) {
+          const r = radius * p.radiusScale;
+          const x = Math.cos(p.angle + ringT * 1.4) * r;
+          const z = Math.sin(p.angle + ringT * 1.4) * r;
+          const y = TREE_TOP_Y + 42 + p.yOff;
+          const proj = project(x, y, z, state.rotY, state.rotX, scaleBase, cx, cy);
+          if (!proj) continue;
+          ctx.globalAlpha = fade * 0.75;
+          const sr = p.size * proj.scale * 1.9;
+          ctx.drawImage(iceGlow, proj.sx - sr, proj.sy - sr, sr * 2, sr * 2);
+        }
+        ctx.restore();
+      }
+
+      function drawFireworks(dt) {
+        if (!state.showFireworks) return;
+
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        for (let i = fireworks.length - 1; i >= 0; i--) {
+          const fw = fireworks[i];
+          fw.age += dt;
+          if (fw.age >= fw.life) {
+            fireworks.splice(i, 1);
+            continue;
+          }
+          const p = fw.age / fw.life;
+          const expand = easeOutCubic(Math.min(1, p * 1.25));
+          const fade = 1 - smoothstep(0.42, 1.0, p);
+          const cx = fw.xNorm * W;
+          const cy = fw.yNorm * H;
+          const sprite = fw.warm ? paleYellowGlow : iceGlow;
+
+          for (const sp of fw.sparks) {
+            const dist = sp.speed * expand;
+            const grav = p * p * 38;
+            const sx = cx + Math.cos(sp.ang) * dist;
+            const sy = cy + Math.sin(sp.ang) * dist + grav;
+            const prevDist = sp.speed * Math.max(0, expand - sp.trailLen);
+            const px = cx + Math.cos(sp.ang) * prevDist;
+            const py = cy + Math.sin(sp.ang) * prevDist + grav * 0.85;
+
+            ctx.strokeStyle = fw.warm
+              ? `rgba(255, 248, 178, ${fade * 0.85})`
+              : `rgba(210, 240, 255, ${fade * 0.78})`;
+            ctx.lineWidth = 1.4;
+            ctx.beginPath();
+            ctx.moveTo(px, py);
+            ctx.lineTo(sx, sy);
+            ctx.stroke();
+
+            ctx.globalAlpha = fade * 0.9;
+            const r = sp.size * 1.9;
+            ctx.drawImage(sprite, sx - r, sy - r, r * 2, r * 2);
+            ctx.globalAlpha = 1;
+          }
+        }
+        ctx.restore();
+      }
+
+      function drawMerryChristmas(introTime, cx, cy, scaleBase) {
+        const writeT = clamp01((introTime - 9.2) / 3.4);
+        if (writeT <= 0.01) return;
+
+        const baseProj = project(0, TREE_BASE_Y + 34, 0, state.rotY, state.rotX, scaleBase, cx, cy);
+        const textY = baseProj ? Math.min(H - 86, baseProj.sy + 6) : H * 0.82;
+        const fontSize = Math.max(28, Math.min(62, Math.min(W * 0.085, 58 * state.zoom)));
+
+        ctx.save();
+        ctx.font = `italic 500 ${fontSize}px "Brush Script MT", "Snell Roundhand", "Segoe Script", "Apple Chancery", cursive`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        const text = "Merry Christmas";
+        const metrics = ctx.measureText(text);
+        const textW = metrics.width + 40;
+        const revealX = cx - textW * 0.5 + textW * easeInOutCubic(writeT);
+
+        // Clip reveal left-to-right to simulate handwriting
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(cx - textW * 0.5, textY - fontSize * 0.9, Math.max(0, revealX - (cx - textW * 0.5)), fontSize * 1.8);
+        ctx.clip();
+
+        ctx.shadowColor = "rgba(185, 228, 255, 0.9)";
+        ctx.shadowBlur = 14;
+        ctx.fillStyle = `rgba(255, 255, 255, ${0.96 * smoothstep(0, 0.15, writeT)})`;
+        ctx.fillText(text, cx, textY);
+        ctx.restore();
+
+        // Traveling sparkle pen tip while writing
+        if (writeT > 0.02 && writeT < 0.98) {
+          ctx.globalCompositeOperation = "lighter";
+          const penR = 20;
+          ctx.drawImage(iceGlow, revealX - penR, textY - penR, penR * 2, penR * 2);
+        }
+        ctx.restore();
+      }
+
+      function render(now) {
+        const dt = Math.min(0.05, (now - (render.lastNow || now)) / 1000);
+        render.lastNow = now;
+
+        if (state.playing) {
+          state.introTime += dt;
+          if (!state.dragging) {
+            state.rotY += dt * 0.36;
+          }
+        }
+        if (!state.dragging) {
+          state.rotY += state.velY;
+          state.velY *= 0.92;
+        }
+        state.rotX += (state.targetRotX - state.rotX) * 0.1;
+        state.zoom += (state.targetZoom - state.zoom) * 0.12;
+        state.time += dt;
+
+        const t = state.time;
+        const introT = state.introTime;
+        const pct = Math.min(100, Math.floor((introT / INTRO_DURATION) * 100));
+        if (pct < 100) {
+          hintEl.textContent = `生成进度 ${pct}% · 拖拽旋转 · 滚轮缩放`;
+        } else {
+          hintEl.textContent = `100% 完成 · 拖拽旋转 · 滚轮缩放`;
+        }
+
+        // Trigger fireworks starting around 8.6s
+        if (state.playing && state.showFireworks && introT >= 8.6) {
+          fireworkCooldown -= dt;
+          if (fireworkCooldown <= 0) {
+            spawnFirework(fireworks.length % 2 === 0 ? 1 : -1);
+            fireworkCooldown = 1.45 + Math.random() * 1.1;
+          }
+        }
+
+        const scaleBase = (Math.min(W, H) / 720) * state.zoom;
+
+        // Dynamic camera follow & wake particle emission during Stage 1 comet intro
+        if (introT < 3.4) {
+          const prog = clamp01(introT / 3.3);
+          const idx = Math.floor(prog * (cometPoints.length - 1));
+          const hp = cometPoints[idx];
+          const cosY = Math.cos(state.rotY * 0.3);
+          const sinY = Math.sin(state.rotY * 0.3);
+          const wx = hp.x * cosY - hp.z * sinY;
+          const targetX = -wx * 0.32 * scaleBase;
+          const targetY = -hp.y * 0.24 * scaleBase;
+          state.camOffX += (targetX - state.camOffX) * Math.min(1, dt * 4.2);
+          state.camOffY += (targetY - state.camOffY) * Math.min(1, dt * 4.2);
+
+          if (state.playing && cometWakeParticles.length < 480) {
+            for (let k = 0; k < 7; k++) {
+              cometWakeParticles.push({
+                x: hp.x + (Math.random() - 0.5) * 14,
+                y: hp.y + (Math.random() - 0.5) * 14,
+                z: hp.z + (Math.random() - 0.5) * 14,
+                vx: (Math.random() - 0.5) * 32,
+                vy: 10 + Math.random() * 28,
+                vz: (Math.random() - 0.5) * 32,
+                age: 0,
+                life: 1.4 + Math.random() * 1.1,
+                size: 1.4 + Math.random() * 2.4,
+                alpha: 0.5 + Math.random() * 0.5,
+                warm: Math.random() < 0.22
+              });
+            }
+          }
+        } else {
+          state.camOffX += (0 - state.camOffX) * Math.min(1, dt * 2.4);
+          state.camOffY += (0 - state.camOffY) * Math.min(1, dt * 2.4);
+        }
+
+        if (state.playing) {
+          for (const wp of cometWakeParticles) {
+            wp.age += dt;
+            wp.x += wp.vx * dt;
+            wp.y += wp.vy * dt;
+            wp.z += wp.vz * dt;
+            wp.vx *= 0.98;
+            wp.vz *= 0.98;
+          }
+        }
+
+        const cx = W * 0.5 + state.camOffX;
+        const cy = H * 0.5 + state.camOffY;
+
+        drawBackground(t, scaleBase, cx, cy);
+        drawFireworks(dt);
+
+        // Soft glowing snow mist under tree base (fades in with vortex)
+        const baseMistAlpha = smoothstep(2.2, 5.2, introT);
+        if (baseMistAlpha > 0.01) {
+          const baseProj = project(0, TREE_BASE_Y + 8, 0, state.rotY, state.rotX, scaleBase, cx, cy);
+          if (baseProj) {
+            ctx.save();
+            ctx.globalCompositeOperation = "lighter";
+            ctx.globalAlpha = baseMistAlpha;
+            const mw = 270 * baseProj.scale;
+            const mh = 85 * baseProj.scale;
+            ctx.drawImage(softMistGlow, baseProj.sx - mw, baseProj.sy - mh, mw * 2, mh * 2);
+            ctx.restore();
+          }
+        }
+
+        // Stage 1 comet ribbon
+        drawCometIntro(introT, cx, cy, scaleBase);
+
+        // Stage 2: Vortex disc -> Tree assembly (2.3s -> 5.8s)
+        const vortexAppear = smoothstep(2.0, 3.2, introT);
+        const assembleBase = clamp01((introT - 3.1) / 2.7);
+        const discSpin = introT * 1.8;
+
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+
+        if (gl && glProgram) {
+          gl.clearColor(0.0, 0.0, 0.0, 1.0);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+          if (vortexAppear > 0.01) {
+            gl.useProgram(glProgram);
+            gl.uniform1f(glUniforms.assemble, assembleBase);
+            gl.uniform1f(glUniforms.vortexAppear, vortexAppear);
+            gl.uniform1f(glUniforms.discSpin, discSpin);
+            gl.uniform1f(glUniforms.rotY, state.rotY);
+            gl.uniform1f(glUniforms.rotX, state.rotX);
+            gl.uniform1f(glUniforms.scaleBase, scaleBase);
+            gl.uniform2f(glUniforms.center, cx, cy);
+            gl.uniform2f(glUniforms.res, W, H);
+            gl.uniform1f(glUniforms.dpr, DPR);
+            gl.uniform1f(glUniforms.time, t);
+            gl.drawArrays(gl.POINTS, 0, TREE_PARTICLE_COUNT);
+          }
+        }
+
+        // Stage 3a: Continuous glowing yellow light ribbon + golden fairy-light garlands (5.2s -> 7.6s)
+        const garlandProg = clamp01((introT - 5.2) / 2.4);
+        if (garlandProg > 0.01) {
+          const gProjList = garlandPoints.map((g) => {
+            const pointReveal = smoothstep(g.t * 0.85, g.t * 0.85 + 0.15, garlandProg);
+            if (pointReveal <= 0.01) return null;
+            const proj = project(g.x, g.y, g.z, state.rotY, state.rotX, scaleBase, cx, cy);
+            return proj ? { g, proj, pointReveal } : null;
+          });
+
+          // Continuous warm-yellow glowing light strip
+          for (let pass = 0; pass < 2; pass++) {
+            const isGlowPass = pass === 0;
+            for (let i = 1; i < gProjList.length; i++) {
+              const a = gProjList[i - 1];
+              const b = gProjList[i];
+              if (!a || !b) continue;
+              const avgDepth = (a.proj.depth + b.proj.depth) * 0.5;
+              const depthAlpha = Math.max(0.18, Math.min(0.95, 1 - avgDepth / 540)) * b.pointReveal;
+              ctx.strokeStyle = isGlowPass
+                ? `rgba(255, 224, 110, ${depthAlpha * 0.45})`
+                : `rgba(255, 248, 195, ${depthAlpha * 0.96})`;
+              ctx.lineWidth = (isGlowPass ? 6.2 : 1.9) * b.proj.scale;
+              ctx.lineCap = "round";
+              ctx.beginPath();
+              ctx.moveTo(a.proj.sx, a.proj.sy);
+              ctx.lineTo(b.proj.sx, b.proj.sy);
+              ctx.stroke();
+            }
+          }
+
+          // Bright twinkling golden bulbs along the yellow light ribbon
+          for (const item of gProjList) {
+            if (!item) continue;
+            const { g, proj, pointReveal } = item;
+            const twinkle = g.isBulb ? 0.78 + 0.22 * Math.sin(t * 2.8 + g.phase) : 0.55;
+            const depthFade = Math.max(0.25, Math.min(1.0, 1 - proj.depth / 560));
+            ctx.globalAlpha = twinkle * depthFade * pointReveal;
+            const radius = g.size * proj.scale * (g.isBulb ? 2.6 : 1.25);
+            ctx.drawImage(goldGlow, proj.sx - radius, proj.sy - radius, radius * 2, radius * 2);
+          }
+        }
+
+        // Sparkling 4-point diamond stars on boughs (6.2s -> 8.2s)
+        const starOrnProg = clamp01((introT - 6.2) / 2.0);
+        if (starOrnProg > 0.01) {
+          for (const st of starOrnaments) {
+            const rev = smoothstep(0, 1, starOrnProg);
+            const proj = project(st.x, st.y, st.z, state.rotY, state.rotX, scaleBase, cx, cy);
+            if (!proj) continue;
+            const tw = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(t * 3.4 + st.phase));
+            const depthFade = Math.max(0.2, Math.min(1.0, 1 - proj.depth / 520));
+            const r = st.size * proj.scale * tw;
+            ctx.globalAlpha = tw * depthFade * rev;
+            ctx.strokeStyle = st.warm ? "rgba(255, 242, 168, 0.95)" : "rgba(225, 244, 255, 0.95)";
+            ctx.lineWidth = Math.max(1, 1.3 * proj.scale);
+            ctx.beginPath();
+            ctx.moveTo(proj.sx - r, proj.sy);
+            ctx.lineTo(proj.sx + r, proj.sy);
+            ctx.moveTo(proj.sx, proj.sy - r);
+            ctx.lineTo(proj.sx, proj.sy + r);
+            ctx.stroke();
+          }
+        }
+
+        ctx.restore();
+
+        // Gift boxes around the snowy base (6.6s -> 8.2s)
+        const giftProg = easeOutCubic(clamp01((introT - 6.6) / 1.6));
+        if (giftProg > 0.01) {
+          const projGifts = giftBoxes
+            .map((gb) => ({ gb, proj: project(gb.x, gb.y, gb.z, state.rotY, state.rotX, scaleBase, cx, cy) }))
+            .filter((x) => x.proj)
+            .sort((a, b) => b.proj.depth - a.proj.depth);
+          for (const { gb, proj } of projGifts) {
+            const bw = gb.w * proj.scale * giftProg;
+            const bh = gb.h * proj.scale * giftProg;
+            if (bw < 2) continue;
+            const depthFade = Math.max(0.35, Math.min(0.95, 1 - proj.depth / 580));
+            ctx.save();
+            ctx.globalAlpha = depthFade * giftProg;
+            ctx.fillStyle = gb.boxColor;
+            ctx.fillRect(proj.sx - bw * 0.5, proj.sy - bh, bw, bh);
+            ctx.fillStyle = gb.ribbonColor;
+            ctx.fillRect(proj.sx - bw * 0.1, proj.sy - bh, bw * 0.2, bh);
+            ctx.fillRect(proj.sx - bw * 0.5, proj.sy - bh * 0.58, bw, bh * 0.18);
+            ctx.restore();
+          }
+        }
+
+        // Stage 3c: Outer luminous spiral ribbon (5.0s -> 7.6s, bottom -> top)
+        const ribbonProg = clamp01((introT - 5.0) / 2.6);
+        if (state.showRibbon && ribbonProg > 0.01) {
+          ctx.save();
+          ctx.globalCompositeOperation = "lighter";
+          const minT = 1 - ribbonProg;
+          const ribbonProj = ribbonPoints.map((pt) =>
+            pt.t >= minT ? project(pt.x, pt.y, pt.z, state.rotY, state.rotX, scaleBase, cx, cy) : null
+          );
+
+          for (let pass = 0; pass < 2; pass++) {
+            const isGlowPass = pass === 0;
+            for (let i = 1; i < ribbonProj.length; i++) {
+              const p0 = ribbonProj[i - 1];
+              const p1 = ribbonProj[i];
+              if (!p0 || !p1) continue;
+              const avgDepth = (p0.depth + p1.depth) * 0.5;
+              const depthAlpha = Math.max(0.14, Math.min(0.95, 1 - avgDepth / 520));
+              ctx.strokeStyle = isGlowPass
+                ? `rgba(185, 228, 255, ${depthAlpha * 0.42})`
+                : `rgba(255, 255, 255, ${depthAlpha * 0.96})`;
+              ctx.lineWidth = (isGlowPass ? 6.5 : 2.1) * p1.scale;
+              ctx.lineCap = "round";
+              ctx.beginPath();
+              ctx.moveTo(p0.sx, p0.sy);
+              ctx.lineTo(p1.sx, p1.sy);
+              ctx.stroke();
+            }
+          }
+
+          for (const d of ribbonDust) {
+            if (d.t < minT) continue;
+            const proj = project(d.x, d.y, d.z, state.rotY, state.rotX, scaleBase, cx, cy);
+            if (!proj) continue;
+            const tw = 0.4 + 0.6 * Math.sin(t * 2.5 + d.phase);
+            ctx.globalAlpha = tw * 0.7;
+            const r = d.size * proj.scale * 1.8;
+            ctx.drawImage(iceGlow, proj.sx - r, proj.sy - r, r * 2, r * 2);
+          }
+
+          // Leading light orb climbing along the spiral ribbon
+          if (ribbonProg < 0.99) {
+            const leadIdx = Math.max(0, Math.min(ribbonPoints.length - 1, Math.floor(minT * (ribbonPoints.length - 1))));
+            const lp = ribbonPoints[leadIdx];
+            const lProj = project(lp.x, lp.y, lp.z, state.rotY, state.rotX, scaleBase, cx, cy);
+            if (lProj) {
+              ctx.globalAlpha = 0.95;
+              const lr = 28 * lProj.scale;
+              ctx.drawImage(iceGlow, lProj.sx - lr, lProj.sy - lr, lr * 2, lr * 2);
+            }
+          }
+          ctx.restore();
+        }
+
+        // Stage 4: Topper starburst + expanding stardust halo ring
+        const topperAlpha = smoothstep(7.3, 8.3, introT);
+        drawTreeTopper(cx, cy, scaleBase, t, topperAlpha);
+        drawTopHaloRing(introT, cx, cy, scaleBase);
+
+        // Stage 5: "Merry Christmas" calligraphy
+        drawMerryChristmas(introT, cx, cy, scaleBase);
+
+        // Ambient drifting snow
+        if (state.showSnow) {
+          ctx.save();
+          ctx.globalCompositeOperation = "lighter";
+          const snowFade = smoothstep(1.5, 4.5, introT);
+          for (const f of snowFlakes) {
+            f.y += f.vy * dt;
+            f.x += (f.vx + Math.sin(t * 0.8 + f.phase) * 14) * dt;
+            if (f.y > 390) f.y = -420;
+            const proj = project(f.x, f.y, f.z, state.rotY * 0.15, state.rotX * 0.3, scaleBase, cx, cy);
+            if (!proj) continue;
+            ctx.globalAlpha = 0.55 * snowFade;
+            const r = f.size * proj.scale * 1.8;
+            ctx.drawImage(iceGlow, proj.sx - r, proj.sy - r, r * 2, r * 2);
+          }
+          ctx.restore();
+        }
+
+        requestAnimationFrame(render);
+      }
+
+      canvas.addEventListener("pointerdown", (e) => {
+        state.dragging = true;
+        state.lastX = e.clientX;
+        state.lastY = e.clientY;
+        state.velY = 0;
+        canvas.setPointerCapture(e.pointerId);
+      });
+
+      canvas.addEventListener("pointermove", (e) => {
+        if (!state.dragging) return;
+        const dx = e.clientX - state.lastX;
+        const dy = e.clientY - state.lastY;
+        state.lastX = e.clientX;
+        state.lastY = e.clientY;
+        state.rotY += dx * 0.008;
+        state.velY = dx * 0.003;
+        state.targetRotX = Math.max(-0.35, Math.min(0.45, state.targetRotX + dy * 0.004));
+      });
+
+      function stopDrag(e) {
+        if (!state.dragging) return;
+        state.dragging = false;
+        try {
+          canvas.releasePointerCapture(e.pointerId);
+        } catch (_) {}
+      }
+
+      canvas.addEventListener("pointerup", stopDrag);
+      canvas.addEventListener("pointercancel", stopDrag);
+
+      canvas.addEventListener(
+        "wheel",
+        (e) => {
+          e.preventDefault();
+          state.targetZoom = Math.max(0.55, Math.min(1.85, state.targetZoom - e.deltaY * 0.0009));
+        },
+        { passive: false }
+      );
+
+      let audioCtx = null;
+      let musicTimer = null;
+      const melody = [
+        [392.0, 0.36], [523.25, 0.36], [523.25, 0.18], [587.33, 0.18], [523.25, 0.18], [493.88, 0.18],
+        [440.0, 0.36], [440.0, 0.36], [440.0, 0.36],
+        [587.33, 0.36], [587.33, 0.18], [659.25, 0.18], [587.33, 0.18], [523.25, 0.18],
+        [493.88, 0.36], [392.0, 0.36], [392.0, 0.36],
+        [659.25, 0.36], [659.25, 0.18], [698.46, 0.18], [659.25, 0.18], [587.33, 0.18],
+        [523.25, 0.36], [440.0, 0.36], [392.0, 0.18], [392.0, 0.18],
+        [440.0, 0.36], [587.33, 0.36], [493.88, 0.36], [523.25, 0.72]
+      ];
+      let noteIdx = 0;
+
+      function playChime(freq, dur) {
+        if (!audioCtx) return;
+        const now = audioCtx.currentTime;
+        const osc = audioCtx.createOscillator();
+        const harmonic = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(freq, now);
+        harmonic.type = "triangle";
+        harmonic.frequency.setValueAtTime(freq * 2, now);
+
+        const harmGain = audioCtx.createGain();
+        harmGain.gain.setValueAtTime(0.08, now);
+
+        gain.gain.setValueAtTime(0.001, now);
+        gain.gain.exponentialRampToValueAtTime(0.11, now + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0008, now + dur * 1.4);
+
+        osc.connect(gain);
+        harmonic.connect(harmGain);
+        harmGain.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        osc.start(now);
+        harmonic.start(now);
+        osc.stop(now + dur * 1.5);
+        harmonic.stop(now + dur * 1.5);
+      }
+
+      function scheduleNextNote() {
+        if (!state.musicOn) return;
+        const [freq, dur] = melody[noteIdx % melody.length];
+        noteIdx++;
+        playChime(freq, dur);
+        musicTimer = setTimeout(scheduleNextNote, dur * 1000);
+      }
+
+      function stopMusic() {
+        if (musicTimer) {
+          clearTimeout(musicTimer);
+          musicTimer = null;
+        }
+      }
+
+      window.onload = () => {
+        requestAnimationFrame(render);
+      };
+    })();
+  </script>
+</body>
+</html>
